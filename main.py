@@ -253,8 +253,8 @@ elif analysis_mode == "Randles-Sevcik Active Surface Area":
         st.warning("Provide at least 3 points for CV analysis.")
 
 elif analysis_mode == "Adsorption Isotherms (Linear & Non-Linear)":
-    st.subheader("🧪 Adsorption Isotherms (Langmuir & Freundlich Fitting)")
-    st.write("Fit equilibrium adsorption data ($C_e$ vs $q_e$) using both linear and non-linear regression models.")
+    st.subheader("🧪 Adsorption Isotherms: Non-Linear & Linear Fitting")
+    st.write("Perform rigorous **Non-Linear Curve Fitting** alongside traditional linear transformations for Langmuir & Freundlich models ($C_e$ vs $q_e$).")
     
     uploaded_ads = st.file_uploader("Upload Adsorption CSV file", type=["csv"], key="ads_uploader")
     if uploaded_ads is not None:
@@ -279,38 +279,60 @@ elif analysis_mode == "Adsorption Isotherms (Linear & Non-Linear)":
         ads_df = pd.DataFrame({'ce': ce, 'qe': qe}).dropna()
 
         if len(ads_df) >= 3 and (ads_df['ce'] > 0).all() and (ads_df['qe'] > 0).all():
-            # Langmuir Non-Linear Fit: qe = (Qmax * KL * Ce) / (1 + KL * Ce)
-            def langmuir_func(ce_val, qmax, kl):
+            
+            # --- 1. NON-LINEAR LANGMUIR FITTING ---
+            def langmuir_nl(ce_val, qmax, kl):
                 return (qmax * kl * ce_val) / (1.0 + kl * ce_val)
 
+            # --- 2. NON-LINEAR FREUNDLICH FITTING ---
+            def freundlich_nl(ce_val, kf, n_val):
+                return kf * (ce_val ** (1.0 / n_val))
+
             try:
-                popt, _ = optimize.curve_fit(langmuir_func, ads_df['ce'], ads_df['qe'], p0=[100.0, 0.1])
-                nl_qmax, nl_kl = popt[0], popt[1]
-                # Calculate R2 for non-linear fit
-                residuals = ads_df['qe'] - langmuir_func(ads_df['ce'], nl_qmax, nl_kl)
-                ss_res = np.sum(residuals**2)
-                ss_tot = np.sum((ads_df['qe'] - np.mean(ads_df['qe']))**2)
-                nl_r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-            except:
-                nl_qmax, nl_kl, nl_r2 = 0, 0, 0
+                # Non-linear Curve Fit for Langmuir
+                popt_l, _ = optimize.curve_fit(langmuir_nl, ads_df['ce'], ads_df['qe'], p0=[100.0, 0.1], maxfev=5000)
+                nl_qmax, nl_kl = popt_l[0], popt_l[1]
+                res_l = ads_df['qe'] - langmuir_nl(ads_df['ce'], nl_qmax, nl_kl)
+                nl_l_r2 = 1 - (np.sum(res_l**2) / np.sum((ads_df['qe'] - np.mean(ads_df['qe']))**2))
 
-            st.markdown("### 📊 Non-Linear Langmuir Parameters")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Non-Linear $Q_{max}$ (mg/g)", f"{nl_qmax:.2f}")
-            m2.metric("Non-Linear $K_L$ (L/mg)", f"{nl_kl:.4f}")
-            m3.metric("Non-Linear $R^2$", f"{nl_r2:.4f}")
+                # Non-linear Curve Fit for Freundlich
+                popt_f, _ = optimize.curve_fit(freundlich_nl, ads_df['ce'], ads_df['qe'], p0=[10.0, 2.0], maxfev=5000)
+                nl_kf, nl_n = popt_f[0], popt_f[1]
+                res_f = ads_df['qe'] - freundlich_nl(ads_df['ce'], nl_kf, nl_n)
+                nl_f_r2 = 1 - (np.sum(res_f**2) / np.sum((ads_df['qe'] - np.mean(ads_df['qe']))**2))
 
-            # Plot Non-Linear Fit curve
-            ce_smooth = np.linspace(ads_df['ce'].min(), ads_df['ce'].max(), 100)
-            qe_smooth = langmuir_func(ce_smooth, nl_qmax, nl_kl)
+            except Exception as e:
+                nl_qmax, nl_kl, nl_l_r2 = 0, 0, 0
+                nl_kf, nl_n, nl_f_r2 = 0, 0, 0
+
+            st.markdown("### 📊 Non-Linear Regression Parameters (Publication Standard)")
+            col_nl1, col_nl2 = st.columns(2)
             
-            fig_nl = px.scatter(ads_df, x='ce', y='qe', title="Non-Linear Langmuir Adsorption Isotherm", labels={'ce': 'Ce (mg/L)', 'qe': 'qe (mg/g)'})
-            fig_nl.add_scatter(x=ce_smooth, y=qe_smooth, mode="lines", name="Non-Linear Fit")
-            st.plotly_chart(fig_nl, use_container_width=True)
+            with col_nl1:
+                st.markdown("#### 🌟 Langmuir Model (Non-Linear)")
+                st.metric("Qmax (mg/g)", f"{nl_qmax:.2f}")
+                st.metric("KL (L/mg)", f"{nl_kl:.4f}")
+                st.metric("Non-Linear R²", f"{nl_l_r2:.4f}")
+
+            with col_nl2:
+                st.markdown("#### 🌟 Freundlich Model (Non-Linear)")
+                st.metric("KF ((mg/g)(L/mg)^(1/n))", f"{nl_kf:.2f}")
+                st.metric("Adsorption Intensity (n)", f"{nl_n:.2f}")
+                st.metric("Non-Linear R²", f"{nl_f_r2:.4f}")
+
+            # Plotting Non-Linear Curves
+            ce_smooth = np.linspace(ads_df['ce'].min(), ads_df['ce'].max(), 200)
+            qe_lang_smooth = langmuir_nl(ce_smooth, nl_qmax, nl_kl)
+            qe_freund_smooth = freundlich_nl(ce_smooth, nl_kf, nl_n)
+
+            fig_ads = px.scatter(ads_df, x='ce', y='qe', title="Non-Linear Adsorption Isotherms Fitting", labels={'ce': 'Equilibrium Concentration Ce (mg/L)', 'qe': 'Adsorption Capacity qe (mg/g)'})
+            fig_ads.add_scatter(x=ce_smooth, y=qe_lang_smooth, mode="lines", name=f"Langmuir Fit (R²={nl_l_r2:.3f})")
+            fig_ads.add_scatter(x=ce_smooth, y=qe_freund_smooth, mode="lines", name=f"Freundlich Fit (R²={nl_f_r2:.3f})", line=dict(dash='dash'))
+            st.plotly_chart(fig_ads, use_container_width=True)
 
             isotherm_results = pd.DataFrame({
-                "Parameter": ["Non-Linear Qmax (mg/g)", "Non-Linear KL (L/mg)", "Non-Linear R2"],
-                "Value": [nl_qmax, nl_kl, nl_r2]
+                "Model Parameter": ["Langmuir Qmax (mg/g)", "Langmuir KL (L/mg)", "Langmuir Non-Linear R2", "Freundlich KF", "Freundlich n", "Freundlich Non-Linear R2"],
+                "Value": [nl_qmax, nl_kl, nl_l_r2, nl_kf, nl_n, nl_f_r2]
             })
             st.download_button("📥 Download Non-Linear Isotherm Results (CSV)", data=isotherm_results.to_csv(index=False).encode('utf-8'), file_name="isotherm_nonlinear_results.csv", mime="text/csv")
         else:
@@ -469,10 +491,8 @@ elif analysis_mode == "Double-Layer Capacitance (Cdl) & ECSA":
         cdl_df = pd.DataFrame({'v': v_c, 'i': i_c}).dropna()
 
         if len(cdl_df) >= 3:
-            # Slope of Ic vs scan rate gives 2 * Cdl (since Ic = Cdl * v, actually slope = Cdl if plotted as (I_a - I_c)/2 vs v)
-            # Standard method: plot (I_a - I_c)/2 vs scan rate. Here let's assume current is capacitive current.
             slope_cdl, _, r_cdl, _, _ = stats.linregress(cdl_df['v'], cdl_df['i'])
-            cdl_value = slope_cdl / 2.0  # µF (if current in µA and v in V/s)
+            cdl_value = slope_cdl / 2.0
             ecsa_val = (cdl_value / cs_val) if cs_val != 0 else 0
 
             st.markdown("### 📊 Capacitance Results")
@@ -570,7 +590,7 @@ elif analysis_mode == "Citation & Manuscript Info":
     citation_apa = "Safdar, R. (2026). EcoSensing-AI: An Advanced Computational Suite for Electroanalytical Sensors and Environmental Remediation. GitHub Repository. https://github.com/safdarrania112-ctrl/ecosensing-ai"
     
     citation_bibtex = """@software{EcoSensingAI2026,
-  author = {Safdar, Rania},
+  author = {Rania Safdar},
   title = {EcoSensing-AI: Professional Publication-Grade Electroanalytical Suite},
   year = {2026},
   publisher = {GitHub},
